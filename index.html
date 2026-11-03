@@ -1,0 +1,1144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>排版引擎实验台 · 分层图自动布局</title>
+<meta name="description" content="纯前端零依赖的 AI 视频生成流水线画布，演示分层图自动排版（Sugiyama + barycenter）。拖动、框选、成组、撤销，一键把缠绕的连线解开。" />
+<meta property="og:title" content="排版引擎实验台 · 分层图自动布局" />
+<meta property="og:description" content="把一条真实的 AI 视频生成流水线画乱，再一键排版——连线交叉数实时可见。" />
+<style>
+  :root{
+    --bg:#070a0f; --panel:rgba(16,22,32,.82); --panel-solid:#101620;
+    --line:#1e2938; --line-2:#2a3a4d;
+    --ink:#e8eef6; --ink-2:#9fb0c4; --ink-3:#5d7189;
+    --teal:#2dd4bf; --teal-d:#0d9488;
+    --amber:#f59e0b; --rose:#f472b6; --violet:#a78bfa; --sky:#38bdf8; --green:#34d399;
+    --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:"PingFang SC","HarmonyOS Sans SC","Hiragino Sans GB","Microsoft YaHei",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--sans)}
+  canvas{display:block;position:absolute;inset:0;touch-action:none;cursor:default}
+  canvas.panning{cursor:grabbing}
+  canvas.selecting{cursor:crosshair}
+
+  /* ---------- 顶部标题 ---------- */
+  .brand{
+    position:fixed;top:22px;left:26px;z-index:10;pointer-events:none;
+  }
+  .brand .eyebrow{
+    display:inline-flex;align-items:center;gap:8px;
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--teal);opacity:.9;
+  }
+  .brand .eyebrow::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--teal);box-shadow:0 0 0 3px rgba(45,212,191,.16)}
+  .brand h1{font-size:19px;font-weight:650;letter-spacing:-.01em;margin-top:9px}
+  .brand p{font-size:12px;color:var(--ink-3);margin-top:5px;letter-spacing:.01em}
+
+  /* ---------- 右侧指标 ---------- */
+  .metrics{
+    position:fixed;top:22px;right:26px;z-index:10;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    padding:15px 17px;min-width:216px;
+  }
+  .metrics .hd{
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--ink-3);margin-bottom:11px;
+  }
+  .mrow{display:flex;align-items:baseline;justify-content:space-between;gap:14px;padding:5px 0}
+  .mrow .l{font-size:11.5px;color:var(--ink-2)}
+  .mrow .v{font-family:var(--mono);font-size:16px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .mrow .v.dim{color:var(--ink-3)}
+  #mCross.good{color:var(--teal)}
+  #mCross.bad{color:var(--amber)}
+  .delta{
+    font-family:var(--mono);font-size:10px;margin-left:6px;color:var(--teal);
+    opacity:0;transition:opacity .3s;
+  }
+  .delta.on{opacity:1}
+  .sep{height:1px;background:var(--line);margin:9px 0}
+
+  /* ---------- 底部控制 ---------- */
+  .dock{
+    position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:10;
+    display:flex;align-items:center;gap:7px;padding:8px;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    max-width:calc(100vw - 40px);flex-wrap:wrap;justify-content:center;
+  }
+  button{
+    font-family:var(--sans);font-size:12.5px;color:var(--ink-2);
+    background:transparent;border:1px solid transparent;border-radius:9px;
+    padding:8px 13px;cursor:pointer;transition:.16s;white-space:nowrap;
+    display:inline-flex;align-items:center;gap:6px;
+  }
+  button:hover{background:rgba(255,255,255,.06);color:var(--ink)}
+  button:active{transform:scale(.97)}
+  button.primary{
+    background:var(--teal);color:#04120f;font-weight:650;border-color:var(--teal);
+    box-shadow:0 0 0 0 rgba(45,212,191,.5);
+    animation:pulse 2.4s ease-out infinite;
+  }
+  button.primary:hover{background:#5eead4;color:#04120f}
+  button.primary:disabled{animation:none;opacity:.5;cursor:default;transform:none}
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(45,212,191,.42)}
+    70%{box-shadow:0 0 0 11px rgba(45,212,191,0)}
+    100%{box-shadow:0 0 0 0 rgba(45,212,191,0)}
+  }
+  button:disabled{opacity:.34;cursor:default}
+  .divider{width:1px;height:20px;background:var(--line);margin:0 3px}
+  .mode{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--ink-3);
+    padding:0 8px 0 4px;white-space:nowrap;
+  }
+  .mode b{color:var(--teal);font-weight:600}
+
+  /* ---------- 提示 ---------- */
+  .hint{
+    position:fixed;left:50%;bottom:86px;transform:translateX(-50%);z-index:9;
+    font-size:11.5px;color:var(--ink-3);letter-spacing:.02em;
+    pointer-events:none;transition:opacity .5s;text-align:center;
+  }
+  .hint.gone{opacity:0}
+  .hint kbd{
+    font-family:var(--mono);font-size:10px;background:rgba(255,255,255,.07);
+    border:1px solid var(--line-2);border-radius:4px;padding:1px 5px;color:var(--ink-2);
+  }
+
+  /* ---------- 关于 ---------- */
+  .about{
+    position:fixed;left:26px;bottom:26px;z-index:10;max-width:340px;
+    font-size:11px;line-height:1.75;color:var(--ink-3);
+  }
+  .about b{color:var(--ink-2);font-weight:600}
+  .about .tag{
+    display:inline-block;font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
+    color:var(--teal);border:1px solid rgba(45,212,191,.28);border-radius:4px;
+    padding:1px 6px;margin-bottom:7px;
+  }
+
+  @media (max-width:900px){
+    .about{display:none}
+    .brand p{display:none}
+    .metrics{top:auto;bottom:132px;right:14px;left:14px;min-width:0;display:flex;gap:16px;align-items:center;padding:11px 14px}
+    .metrics .hd,.sep{display:none}
+    .metrics .mrow{flex:1;justify-content:space-between;padding:0}
+    .mrow .v{font-size:14px}
+    .dock{bottom:14px;left:14px;right:14px;transform:none;max-width:none}
+    .brand{top:16px;left:16px}
+    .hint{bottom:196px;width:100%;left:0;transform:none;padding:0 20px}
+  }
+</style>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+
+<div class="brand">
+  <div class="eyebrow">Layout Engine Lab</div>
+  <h1>排版引擎实验台</h1>
+  <p>分层图自动布局 · 纯前端 · 零依赖 · 无后端</p>
+</div>
+
+<div class="metrics">
+  <div class="hd">Live Metrics</div>
+  <div class="mrow">
+    <span class="l">连线交叉</span>
+    <span><span class="v bad" id="mCross">0</span><span class="delta" id="dCross"></span></span>
+  </div>
+  <div class="mrow">
+    <span class="l">节点重叠</span>
+    <span><span class="v bad" id="mOverlap">0</span><span class="delta" id="dOverlap"></span></span>
+  </div>
+  <div class="sep"></div>
+  <div class="mrow">
+    <span class="l">节点 / 连线</span>
+    <span class="v dim" id="mCount">0 / 0</span>
+  </div>
+</div>
+
+<div class="hint" id="hint">
+  先随手拖乱它 → 然后点 <kbd>一键排版</kbd> 看交叉数掉下来
+</div>
+
+<div class="dock">
+  <button class="primary" id="btnLayout">一键排版</button>
+  <button id="btnShuffle">随机乱序</button>
+  <div class="divider"></div>
+  <button id="btnGroup">成组</button>
+  <button id="btnUngroup">解散</button>
+  <div class="divider"></div>
+  <button id="btnUndo">撤销</button>
+  <button id="btnRedo">重做</button>
+  <div class="divider"></div>
+  <button id="btnReset">重置视图</button>
+  <span class="mode">模式 <b id="mMode">移动</b></span>
+</div>
+
+<div class="about">
+  <span class="tag">ALGORITHM</span><br />
+  <b>分层（最长路径）+ barycenter 迭代 + 表内排序</b>。
+  本质是 Sugiyama 分层图绘制的一个简化实现：先把节点按依赖分红层，
+  再反复用「相邻层邻居位置的平均值」排序，把交叉压到最低。
+  <br /><br />
+  节点是被打乱的，图结构没变 —— <b>排版不改变语义，只改变呈现。</b>
+  <br /><br />
+  单文件 · 零依赖 · 无构建 · 无网络请求 · 约 1139 行
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var cvs = document.getElementById("stage");
+  var ctx = cvs.getContext("2d");
+  var DPR = 1, W = 0, H = 0;
+
+  var KIND = {
+    input:  { c:"#38bdf8", t:"输入" },
+    net:    { c:"#f59e0b", t:"网络" },
+    model:  { c:"#a78bfa", t:"模型" },
+    task:   { c:"#34d399", t:"任务" },
+    media:  { c:"#f472b6", t:"媒体" },
+    canvas: { c:"#22d3ee", t:"画布" }
+  };
+
+  var NODE_DEFS = [
+    ["提示词","input"], ["参考图","input"], ["模型选择","input"],
+    ["鉴权","net"], ["协议路由","net"], ["参数校验","net"],
+    ["文生视频","model"], ["图生视频","model"], ["音频生成","model"], ["文本改写","model"],
+    ["任务轮询","task"], ["断点续跑","task"], ["限流重试","task"], ["失败降级","task"],
+    ["媒体下载","media"], ["素材入库","media"], ["画布渲染","canvas"],
+    ["导出","media"], ["复盘","canvas"]
+  ];
+
+  var EDGE_DEFS = [
+    ["提示词","鉴权"],["提示词","参数校验"],["参考图","参数校验"],["参考图","协议路由"],
+    ["模型选择","协议路由"],["模型选择","鉴权"],
+    ["鉴权","文生视频"],["协议路由","文生视频"],["参数校验","图生视频"],
+    ["协议路由","图生视频"],["提示词","文本改写"],["参考图","音频生成"],
+    ["文生视频","任务轮询"],["图生视频","任务轮询"],["音频生成","任务轮询"],
+    ["文生视频","断点续跑"],["图生视频","限流重试"],["文本改写","失败降级"],
+    ["音频生成","失败降级"],["参数校验","限流重试"],
+    ["任务轮询","媒体下载"],["断点续跑","媒体下载"],["限流重试","素材入库"],
+    ["失败降级","素材入库"],["媒体下载","画布渲染"],["素材入库","画布渲染"],
+    ["画布渲染","导出"],["素材入库","复盘"],["画布渲染","复盘"],
+    ["断点续跑","限流重试"],["任务轮询","失败降级"]
+  ];
+
+  var NODE_W = 142, NODE_H = 46, COL_GAP = 204, ROW_GAP = 78;
+
+  var state = {
+    nodes: [],
+    edges: [],
+    groups: [],
+    sel: {},
+    view: { x:0, y:0, k:1 },
+    mode: "move",
+    hover: null,
+    drag: null,
+    anim: null,
+    layoutDone: false
+  };
+
+  var history = [], redoStack = [];
+
+  /* ---------------- 工具 ---------------- */
+  function clamp(v, a, b){ return v < a ? a : (v > b ? b : v); }
+  function ease(t){ return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2; }
+  function byId(id){
+    for (var i=0;i<state.nodes.length;i++) if (state.nodes[i].id === id) return state.nodes[i];
+    return null;
+  }
+  function selCount(){ var n=0; for (var k in state.sel) if (state.sel[k]) n++; return n; }
+
+  /* ---------------- 初始化图 ---------------- */
+  function buildGraph(){
+    state.nodes = [];
+    state.edges = [];
+    var i;
+    for (i=0;i<NODE_DEFS.length;i++){
+      state.nodes.push({
+        id: i,
+        label: NODE_DEFS[i][0],
+        kind: NODE_DEFS[i][1],
+        x: 0, y: 0
+      });
+    }
+    var idx = {};
+    for (i=0;i<state.nodes.length;i++) idx[state.nodes[i].label] = i;
+    for (i=0;i<EDGE_DEFS.length;i++){
+      var a = idx[EDGE_DEFS[i][0]], b = idx[EDGE_DEFS[i][1]];
+      if (a === undefined || b === undefined) continue;
+      state.edges.push({ from:a, to:b });
+    }
+    state.sel = {};
+    state.groups = [];
+    state.layoutDone = false;
+  }
+
+  /* ---------------- 分层：最长路径 ---------------- */
+  function computeLayers(){
+    var layer = {}, i;
+    for (i=0;i<state.nodes.length;i++) layer[state.nodes[i].id] = 0;
+    var guard = 0, changed = true;
+    while (changed && guard < 200){
+      changed = false; guard++;
+      for (i=0;i<state.edges.length;i++){
+        var e = state.edges[i];
+        if (layer[e.to] < layer[e.from] + 1){
+          layer[e.to] = layer[e.from] + 1;
+          changed = true;
+        }
+      }
+    }
+    return layer;
+  }
+
+  function neighborIndex(){
+    var map = {};
+    for (var i=0;i<state.nodes.length;i++){ map[state.nodes[i].id] = { pre:[], nxt:[] }; }
+    for (var j=0;j<state.edges.length;j++){
+      map[state.edges[j].from].nxt.push(state.edges[j].to);
+      map[state.edges[j].to].pre.push(state.edges[j].from);
+    }
+    return map;
+  }
+
+  /* ---------------- 坐标 -> 交叉数 ---------------- */
+  function crossingsFor(target){
+    var segs = [], i, e;
+    for (i=0;i<state.edges.length;i++){
+      e = state.edges[i];
+      var p1 = target[e.from], p2 = target[e.to];
+      if (!p1 || !p2) continue;
+      segs.push([p1, p2]);
+    }
+    var cross = 0;
+    for (var x=0;x<segs.length;x++){
+      for (var y=x+1;y<segs.length;y++){
+        var a1=segs[x][0], a2=segs[x][1], b1=segs[y][0], b2=segs[y][1];
+        if (a1===b1||a1===b2||a2===b1||a2===b2) continue;
+        if (segIntersect(a1,a2,b1,b2)) cross++;
+      }
+    }
+    return cross;
+  }
+
+  function assignCoords(cols){
+    var target = {}, maxRows = 0, i, c;
+    for (i=0;i<cols.length;i++) if (cols[i].length > maxRows) maxRows = cols[i].length;
+    for (c=0;c<cols.length;c++){
+      var n = cols[c].length;
+      for (var k2=0;k2<n;k2++){
+        target[cols[c][k2]] = {
+          x: (c - (cols.length-1)/2) * COL_GAP,
+          y: (k2 - (n-1)/2) * ROW_GAP
+        };
+      }
+    }
+    return target;
+  }
+
+  /* ---------------- 自动布局 ---------------- */
+  function computeLayout(){
+    var layer = computeLayers();
+    var maxL = 0, id;
+    for (id in layer) if (layer[id] > maxL) maxL = layer[id];
+
+    var cols = [], i;
+    for (i=0;i<=maxL;i++) cols.push([]);
+    for (i=0;i<state.nodes.length;i++){
+      cols[layer[state.nodes[i].id]].push(state.nodes[i].id);
+    }
+    // 初始顺序：按当前 y 排（保留用户的手工意图）
+    for (i=0;i<cols.length;i++){
+      cols[i].sort(function(a,b){ return byId(a).y - byId(b).y; });
+    }
+
+    var nb = neighborIndex();
+    var row = {};
+    function syncRow(){
+      for (var c=0;c<cols.length;c++){
+        for (var r=0;r<cols[c].length;r++) row[cols[c][r]] = r;
+      }
+    }
+    syncRow();
+
+    function bary(nid, usePrev){
+      var list = usePrev ? nb[nid].pre : nb[nid].nxt;
+      if (!list.length) return row[nid];
+      var sum = 0, n = 0;
+      for (var k=0;k<list.length;k++){
+        if (row[list[k]] !== undefined){ sum += row[list[k]]; n++; }
+      }
+      return n ? sum/n : row[nid];
+    }
+
+    // 4 轮上下交替扫描
+    for (var sweep=0; sweep<4; sweep++){
+      var down = (sweep % 2 === 0);
+      var range = down ? [] : [];
+      var c;
+      if (down){ for (c=1;c<=maxL;c++) range.push(c); }
+      else { for (c=maxL-1;c>=0;c--) range.push(c); }
+      for (var ri=0; ri<range.length; ri++){
+        c = range[ri];
+        var colIds = cols[c].slice();
+        colIds.sort(function(a,b){
+          var ba = bary(a, down), bb = bary(b, down);
+          if (Math.abs(ba-bb) > 1e-6) return ba - bb;
+          return row[a] - row[b];
+        });
+        cols[c] = colIds;
+        for (var r2=0;r2<colIds.length;r2++) row[colIds[r2]] = r2;
+      }
+    }
+
+    var target = assignCoords(cols);
+    var best = crossingsFor(target);
+
+    // 局部交换优化：在每一层里试相邻换位，能减少交叉就保留
+    for (var pass=0; pass<4 && best>0; pass++){
+      var improved = false;
+      for (var cc=0; cc<cols.length; cc++){
+        var col = cols[cc];
+        for (var ri2=0; ri2<col.length-1; ri2++){
+          var tmp = col[ri2]; col[ri2] = col[ri2+1]; col[ri2+1] = tmp;
+          var t2 = assignCoords(cols);
+          var c2n = crossingsFor(t2);
+          if (c2n < best){
+            best = c2n; target = t2; improved = true;
+          } else {
+            var tmp2 = col[ri2]; col[ri2] = col[ri2+1]; col[ri2+1] = tmp2;
+          }
+        }
+      }
+      if (!improved) break;
+    }
+    return target;
+  }
+
+  /* ---------------- 指标 ---------------- */
+  function segIntersect(p1,p2,p3,p4){
+    function d(a,b,c){ return (b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x); }
+    var d1=d(p3,p4,p1), d2=d(p3,p4,p2), d3=d(p1,p2,p3), d4=d(p1,p2,p4);
+    return ((d1>0&&d2<0)||(d1<0&&d2>0)) && ((d3>0&&d4<0)||(d3<0&&d4>0));
+  }
+
+  function anchors(){
+    var a = {};
+    for (var i=0;i<state.nodes.length;i++){
+      var n = state.nodes[i];
+      a[n.id] = { x:n.x, y:n.y };
+    }
+    return a;
+  }
+
+  function countOverlaps(){
+    var c = 0;
+    for (var i=0;i<state.nodes.length;i++){
+      for (var j=i+1;j<state.nodes.length;j++){
+        var a = state.nodes[i], b = state.nodes[j];
+        if (Math.abs(a.x-b.x) < NODE_W*0.92 && Math.abs(a.y-b.y) < NODE_H*0.92) c++;
+      }
+    }
+    return c;
+  }
+
+  function computeMetrics(){
+    var a = anchors();
+    var segs = [];
+    for (var i=0;i<state.edges.length;i++){
+      var e = state.edges[i];
+      var p1 = a[e.from], p2 = a[e.to];
+      if (!p1 || !p2) continue;
+      segs.push([p1,p2]);
+    }
+    var cross = 0;
+    for (var x=0;x<segs.length;x++){
+      for (var y=x+1;y<segs.length;y++){
+        if (segs[x][0]===segs[y][0] || segs[x][0]===segs[y][1] ||
+            segs[x][1]===segs[y][0] || segs[x][1]===segs[y][1]) continue;
+        if (segIntersect(segs[x][0],segs[x][1],segs[y][0],segs[y][1])) cross++;
+      }
+    }
+    return { cross: cross, overlap: countOverlaps() };
+  }
+
+  /* ---------------- 渲染 ---------------- */
+  function resize(){
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    cvs.width = Math.floor(W * DPR);
+    cvs.height = Math.floor(H * DPR);
+    cvs.style.width = W + "px";
+    cvs.style.height = H + "px";
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    draw();
+  }
+
+  function roundRect(x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+  }
+
+  function draw(){
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    ctx.clearRect(0,0,W,H);
+
+    // 背景网格
+    var k = state.view.k;
+    var gx = state.view.x, gy = state.view.y;
+    var step = 44 * k;
+    if (step > 8){
+      ctx.fillStyle = "rgba(120,150,190,.13)";
+      var ox = ((gx % step) + step) % step;
+      var oy = ((gy % step) + step) % step;
+      for (var px = ox; px < W; px += step){
+        for (var py = oy; py < H; py += step){
+          ctx.fillRect(px, py, 1.1, 1.1);
+        }
+      }
+    }
+
+    ctx.save();
+    ctx.translate(state.view.x, state.view.y);
+    ctx.scale(k, k);
+
+    var i;
+    // 组框
+    for (i=0;i<state.groups.length;i++){
+      var g = state.groups[i];
+      var bb = groupBBox(g);
+      if (!bb) continue;
+      ctx.setLineDash([6,5]);
+      ctx.lineWidth = 1.4 / k;
+      ctx.strokeStyle = "rgba(45,212,191,.42)";
+      roundRect(bb.x-16, bb.y-16, bb.w+32, bb.h+32, 14);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(45,212,191,.06)";
+      roundRect(bb.x-16, bb.y-16, bb.w+32, bb.h+32, 14);
+      ctx.fill();
+    }
+
+    // 连线
+    for (i=0;i<state.edges.length;i++){
+      var e = state.edges[i];
+      var a = byId(e.from), b = byId(e.to);
+      if (!a || !b) continue;
+      var active = state.sel[a.id] || state.sel[b.id];
+      var halfW = NODE_W/2, halfH = NODE_H/2;
+      var dx = b.x - a.x, dy = b.y - a.y;
+      var dist = Math.sqrt(dx*dx + dy*dy) || 1;
+      var ux = dx/dist, uy = dy/dist;
+      var ax = a.x + ux*halfW*0.92, ay = a.y + uy*halfH*0.92;
+      var bx = b.x - ux*halfW*0.92, by = b.y - uy*halfH*0.92;
+      var mx = (ax+bx)/2, my = (ay+by)/2;
+      var off = Math.min(70, dist*0.22);
+      var cx = mx - uy*off, cy = my + ux*off;
+
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.quadraticCurveTo(cx, cy, bx, by);
+      ctx.lineWidth = (active ? 2 : 1.15) / Math.max(k*0.75, 1);
+      ctx.strokeStyle = active ? "rgba(45,212,191,.85)" : "rgba(120,155,195,.28)";
+      ctx.stroke();
+
+      // 箭头
+      var ang = Math.atan2(by - cy, bx - cx);
+      var s = 5.2;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(bx - s*Math.cos(ang-0.42), by - s*Math.sin(ang-0.42));
+      ctx.lineTo(bx - s*Math.cos(ang+0.42), by - s*Math.sin(ang+0.42));
+      ctx.closePath();
+      ctx.fillStyle = active ? "rgba(45,212,191,.9)" : "rgba(120,155,195,.4)";
+      ctx.fill();
+    }
+
+    // 节点
+    for (i=0;i<state.nodes.length;i++) drawNode(state.nodes[i], k);
+
+    // 框选
+    if (state.drag && state.drag.type === "box"){
+      var r = normRect(state.drag.x0, state.drag.y0, state.drag.x1, state.drag.y1);
+      ctx.fillStyle = "rgba(45,212,191,.10)";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = "rgba(45,212,191,.65)";
+      ctx.lineWidth = 1.2 / k;
+      ctx.setLineDash([5,4]);
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      ctx.setLineDash([]);
+    }
+
+    ctx.restore();
+  }
+
+  function drawNode(n, k){
+    var selected = !!state.sel[n.id];
+    var hovered = state.hover === n.id;
+    var x = n.x - NODE_W/2, y = n.y - NODE_H/2;
+    var kind = KIND[n.kind] || KIND.input;
+
+    ctx.save();
+    if (selected){
+      ctx.shadowColor = "rgba(45,212,191,.55)";
+      ctx.shadowBlur = 22 / Math.max(k, .55);
+    } else if (hovered){
+      ctx.shadowColor = "rgba(140,180,220,.22)";
+      ctx.shadowBlur = 16 / Math.max(k, .55);
+    }
+
+    roundRect(x, y, NODE_W, NODE_H, 10);
+    ctx.fillStyle = selected ? "#16242b" : "#111925";
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    ctx.lineWidth = (selected ? 1.8 : 1.1) / Math.max(k*0.8, .8);
+    ctx.strokeStyle = selected ? "rgba(45,212,191,.95)"
+                    : (hovered ? "rgba(150,185,220,.5)" : "rgba(58,74,96,.9)");
+    roundRect(x, y, NODE_W, NODE_H, 10);
+    ctx.stroke();
+
+    // 左侧色条
+    ctx.beginPath();
+    ctx.moveTo(x+1, y+9);
+    ctx.arcTo(x+1, y+1, x+9, y+1, 8);
+    ctx.lineTo(x+4, y+2);
+    ctx.lineTo(x+4, y+NODE_H-2);
+    ctx.lineTo(x+9, y+NODE_H-1);
+    ctx.arcTo(x+1, y+NODE_H-1, x+1, y+NODE_H-9, 8);
+    ctx.closePath();
+    ctx.fillStyle = kind.c;
+    ctx.globalAlpha = selected ? 1 : 0.8;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // 文字
+    ctx.textBaseline = "middle";
+    ctx.font = "600 13px " + getComputedStyle(document.body).fontFamily;
+    ctx.fillStyle = selected ? "#ffffff" : "#dbe6f2";
+    ctx.fillText(n.label, x + 15, y + NODE_H/2 - 5);
+
+    ctx.font = "10px " + getComputedStyle(document.body).fontFamily;
+    ctx.fillStyle = "rgba(140,165,195,.6)";
+    ctx.fillText(kind.t, x + 15, y + NODE_H/2 + 9);
+
+    // 连接点
+    ctx.fillStyle = kind.c;
+    ctx.globalAlpha = .55;
+    ctx.beginPath(); ctx.arc(x + NODE_W, y + NODE_H/2, 2.4, 0, 6.284); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y + NODE_H/2, 2.4, 0, 6.284); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
+  }
+
+  function normRect(x0,y0,x1,y1){
+    return {
+      x: Math.min(x0,x1), y: Math.min(y0,y1),
+      w: Math.abs(x1-x0), h: Math.abs(y1-y0)
+    };
+  }
+
+  function groupBBox(g){
+    var minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9,n=0;
+    for (var i=0;i<g.length;i++){
+      var nd = byId(g[i]);
+      if (!nd) continue;
+      n++;
+      if (nd.x-NODE_W/2 < minX) minX = nd.x-NODE_W/2;
+      if (nd.y-NODE_H/2 < minY) minY = nd.y-NODE_H/2;
+      if (nd.x+NODE_W/2 > maxX) maxX = nd.x+NODE_W/2;
+      if (nd.y+NODE_H/2 > maxY) maxY = nd.y+NODE_H/2;
+    }
+    if (!n) return null;
+    return { x:minX, y:minY, w:maxX-minX, h:maxY-minY };
+  }
+
+  /* ---------------- 坐标转换 ---------------- */
+  function toWorld(clientX, clientY){
+    return {
+      x: (clientX - state.view.x) / state.view.k,
+      y: (clientY - state.view.y) / state.view.k
+    };
+  }
+  function hitTest(p){
+    for (var i=state.nodes.length-1;i>=0;i--){
+      var n = state.nodes[i];
+      if (Math.abs(p.x-n.x) <= NODE_W/2 && Math.abs(p.y-n.y) <= NODE_H/2) return n;
+    }
+    return null;
+  }
+
+  /* ---------------- 历史 ---------------- */
+  function snapshot(){
+    var pos = {};
+    for (var i=0;i<state.nodes.length;i++) pos[state.nodes[i].id] = { x:state.nodes[i].x, y:state.nodes[i].y };
+    var groups = state.groups.map(function(g){ return g.slice(); });
+    return { pos: pos, groups: groups };
+  }
+  function pushHistory(){
+    history.push(snapshot());
+    if (history.length > 60) history.shift();
+    redoStack.length = 0;
+    updateButtons();
+  }
+  function applySnapshot(s){
+    for (var id in s.pos){
+      var n = byId(Number(id));
+      if (n){ n.x = s.pos[id].x; n.y = s.pos[id].y; }
+    }
+    state.groups = s.groups.map(function(g){ return g.slice(); });
+    state.anim = null;
+    draw(); refreshMetrics(false);
+  }
+  function undo(){
+    if (!history.length) return;
+    redoStack.push(snapshot());
+    applySnapshot(history.pop());
+    updateButtons();
+  }
+  function redo(){
+    if (!redoStack.length) return;
+    history.push(snapshot());
+    applySnapshot(redoStack.pop());
+    updateButtons();
+  }
+
+  /* ---------------- 动画 ---------------- */
+  function animateTo(target, ms){
+    var from = {};
+    var maxDist = 0;
+    for (var id in target){
+      var n = byId(Number(id));
+      if (!n) continue;
+      from[id] = { x:n.x, y:n.y };
+      var dx = target[id].x - n.x, dy = target[id].y - n.y;
+      var d = Math.sqrt(dx*dx + dy*dy);
+      if (d > maxDist) maxDist = d;
+    }
+    state.anim = {
+      from: from, to: target, t0: performance.now(),
+      dur: Math.max(360, Math.min(ms || 900, 420 + maxDist * 1.4))
+    };
+    // 兜底：rAF 被节流（切后台 / 无头环境）时，也必须把布局落到位
+    state.anim.timer = setTimeout(finishAnim, state.anim.dur + 90);
+    requestAnimationFrame(stepAnim);
+  }
+
+  function finishAnim(){
+    var a = state.anim;
+    if (!a) return;
+    if (a.timer) clearTimeout(a.timer);
+    for (var id in a.to){
+      var n = byId(Number(id));
+      if (n){ n.x = a.to[id].x; n.y = a.to[id].y; }
+    }
+    state.anim = null;
+    refreshMetrics(true);
+    fitView(true);
+  }
+
+  function stepAnim(now){
+    var a = state.anim;
+    if (!a) return;
+    var t = clamp((now - a.t0) / a.dur, 0, 1);
+    var e = ease(t);
+    for (var id in a.to){
+      var n = byId(Number(id));
+      if (!n) continue;
+      var f = a.from[id];
+      n.x = f.x + (a.to[id].x - f.x) * e;
+      n.y = f.y + (a.to[id].y - f.y) * e;
+    }
+    draw();
+    if (t < 1){
+      requestAnimationFrame(stepAnim);
+    } else {
+      finishAnim();
+    }
+  }
+
+  /* ---------------- 指标刷新 ---------------- */
+  var lastMetrics = { cross:0, overlap:0 };
+
+  function refreshMetrics(withDelta){
+    var m = computeMetrics();
+    var elC = document.getElementById("mCross");
+    var elO = document.getElementById("mOverlap");
+    var dC = document.getElementById("dCross");
+    var dO = document.getElementById("dOverlap");
+
+    elC.textContent = m.cross;
+    elO.textContent = m.overlap;
+    elC.className = "v " + (m.cross > 14 ? "bad" : "good");
+    elO.className = "v " + (m.overlap > 0 ? "bad" : "good");
+
+    if (withDelta){
+      if (lastMetrics.cross !== m.cross){
+        var dc = m.cross - lastMetrics.cross;
+        dC.textContent = (dc > 0 ? "+" : "") + dc;
+        dC.classList.add("on");
+        setTimeout(function(){ dC.classList.remove("on"); }, 3000);
+      }
+      if (lastMetrics.overlap !== m.overlap){
+        var dobj = m.overlap - lastMetrics.overlap;
+        dO.textContent = (dobj > 0 ? "+" : "") + dobj;
+        dO.classList.add("on");
+        setTimeout(function(){ dO.classList.remove("on"); }, 3000);
+      }
+    }
+    lastMetrics = m;
+  }
+
+  /* ---------------- 视图自适应 ---------------- */
+  function fitView(animated){
+    if (!state.nodes.length) return;
+    var minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+    for (var i=0;i<state.nodes.length;i++){
+      var n = state.nodes[i];
+      minX = Math.min(minX, n.x-NODE_W/2);
+      minY = Math.min(minY, n.y-NODE_H/2);
+      maxX = Math.max(maxX, n.x+NODE_W/2);
+      maxY = Math.max(maxY, n.y+NODE_H/2);
+    }
+    var padX = 78, padY = 96;
+    var availW = W - padX*2, availH = H - padY*2;
+    var k = Math.min(availW / Math.max(maxX-minX, 1), availH / Math.max(maxY-minY, 1));
+    k = clamp(k, 0.34, 1.55);
+    var vx = W/2 - ((minX+maxX)/2) * k;
+    var vy = H/2 - ((minY+maxY)/2) * k;
+    if (animated){
+      animateView(vx, vy, k);
+    } else {
+      state.view = { x:vx, y:vy, k:k };
+      draw();
+    }
+  }
+
+  function animateView(tx, ty, tk){
+    var v0 = { x:state.view.x, y:state.view.y, k:state.view.k };
+    var t0 = performance.now(), dur = 620;
+    (function step(now){
+      var t = clamp((now-t0)/dur, 0, 1), e = ease(t);
+      state.view.x = v0.x + (tx-v0.x)*e;
+      state.view.y = v0.y + (ty-v0.y)*e;
+      state.view.k = v0.k + (tk-v0.k)*e;
+      draw();
+      if (t < 1) requestAnimationFrame(step);
+    })(performance.now());
+  }
+
+  /* ---------------- 打乱 ---------------- */
+  var _seed = 1;
+  function rc(){
+    _seed = (_seed * 1664525 + 1013904223) % 4294967296;
+    return _seed / 4294967296;
+  }
+
+  function scramble(spread, seed){
+    var i, n;
+    var s = spread || 1;
+    _seed = (seed === undefined ? Date.now() : seed) % 4294967296;
+
+    // 先把每一层的上下顺序整体颠倒 —— 刻意制造最大交叉
+    var layer = computeLayers();
+    var byLayer = {};
+    for (i=0;i<state.nodes.length;i++){
+      n = state.nodes[i];
+      if (!byLayer[layer[n.id]]) byLayer[layer[n.id]] = [];
+      byLayer[layer[n.id]].push(n);
+    }
+    for (var key in byLayer){
+      var col = byLayer[key].slice().sort(function(a,b){ return a.y - b.y; });
+      var ys = col.map(function(x){ return x.y; }).reverse();
+      for (i=0;i<col.length;i++) col[i].y = ys[i];
+    }
+
+    // 横向压成"一团"，纵向保持，让它看起来像被打结
+    for (i=0;i<state.nodes.length;i++){
+      n = state.nodes[i];
+      n.x = n.x * 0.40 + (rc()-0.5) * 210 * s;
+      n.y = n.y * 0.70 + (rc()-0.5) * 90 * s;
+    }
+    // 极轻的互斥，避免完全叠死
+    for (i=0;i<state.nodes.length;i++){
+      n = state.nodes[i];
+      for (var j=0;j<state.nodes.length;j++){
+        if (i === j) continue;
+        var m = state.nodes[j];
+        var dx = n.x-m.x, dy = n.y-m.y;
+        var minX = NODE_W*0.62, minY = NODE_H*0.95;
+        if (Math.abs(dx) < minX && Math.abs(dy) < minY){
+          n.x += (dx >= 0 ? 1 : -1) * (minX - Math.abs(dx)) * 0.22;
+          n.y += (dy >= 0 ? 1 : -1) * (minY - Math.abs(dy)) * 0.22;
+        }
+      }
+    }
+    state.layoutDone = false;
+    state.sel = {};
+    state.groups = [];
+  }
+
+  /* ---------------- 交互 ---------------- */
+  var pointers = {};
+
+  cvs.addEventListener("pointerdown", function(ev){
+    if (ev.button === 1) return;
+    cvs.setPointerCapture(ev.pointerId);
+    var p = toWorld(ev.clientX, ev.clientY);
+    var node = hitTest(p);
+
+    if (node){
+      if (ev.ctrlKey || ev.metaKey){
+        state.sel[node.id] = !state.sel[node.id];
+      } else if (!state.sel[node.id]){
+        state.sel = {};
+        state.sel[node.id] = true;
+      }
+      // 成组联动
+      var moved = {};
+      var gid = findGroupOf(node.id);
+      if (gid !== -1){
+        for (var i=0;i<state.groups[gid].length;i++) moved[state.groups[gid][i]] = true;
+      }
+      for (var k in state.sel) moved[k] = true;
+
+      state.drag = {
+        type:"node", start:p, moved:moved,
+        origin:{}, ids:[]
+      };
+      for (var id in moved){
+        var nd = byId(Number(id));
+        if (nd) state.drag.origin[id] = { x:nd.x, y:nd.y };
+      }
+      draw();
+    } else {
+      if (state.mode === "select" || ev.altKey || (ev.shiftKey && !state.mode)){
+        state.drag = { type:"box", x0:p.x, y0:p.y, x1:p.x, y1:p.y, additive:ev.ctrlKey||ev.metaKey };
+        cvs.classList.add("selecting");
+      } else {
+        state.drag = { type:"pan", sx:ev.clientX, sy:ev.clientY, vx:state.view.x, vy:state.view.y };
+        cvs.classList.add("panning");
+      }
+    }
+    hideHint();
+  });
+
+  cvs.addEventListener("pointermove", function(ev){
+    var p = toWorld(ev.clientX, ev.clientY);
+    var d = state.drag;
+
+    if (!d){
+      var h = hitTest(p);
+      var hh = h ? h.id : null;
+      if (hh !== state.hover){ state.hover = hh; draw(); }
+      return;
+    }
+
+    if (d.type === "pan"){
+      state.view.x = d.vx + (ev.clientX - d.sx);
+      state.view.y = d.vy + (ev.clientY - d.sy);
+      draw();
+    } else if (d.type === "box"){
+      d.x1 = p.x; d.y1 = p.y;
+      draw();
+    } else if (d.type === "node"){
+      if (!d.pushed){ pushHistory(); d.pushed = true; }
+      var dx = p.x - d.start.x, dy = p.y - d.start.y;
+      for (var id in d.origin){
+        var n = byId(Number(id));
+        if (!n) continue;
+        n.x = d.origin[id].x + dx;
+        n.y = d.origin[id].y + dy;
+      }
+      state.layoutDone = false;
+      draw();
+    }
+  });
+
+  function endDrag(ev){
+    var d = state.drag;
+    if (!d) return;
+    cvs.classList.remove("selecting","panning");
+
+    if (d.type === "box"){
+      var r = normRect(d.x0,d.y0,d.x1,d.y1);
+      if (!d.additive) state.sel = {};
+      for (var i=0;i<state.nodes.length;i++){
+        var n = state.nodes[i];
+        if (n.x+NODE_W/2 > r.x && n.x-NODE_W/2 < r.x+r.w &&
+            n.y+NODE_H/2 > r.y && n.y-NODE_H/2 < r.y+r.h){
+          state.sel[n.id] = true;
+        }
+      }
+      refreshMetrics(false);
+    }
+    state.drag = null;
+    updateButtons();
+    draw();
+  }
+
+  cvs.addEventListener("pointerup", endDrag);
+  cvs.addEventListener("pointercancel", endDrag);
+
+  cvs.addEventListener("wheel", function(ev){
+    ev.preventDefault();
+    var k0 = state.view.k;
+    var factor = Math.exp(-ev.deltaY * 0.0016);
+    var k1 = clamp(k0 * factor, 0.22, 3.2);
+    var wx = (ev.clientX - state.view.x) / k0;
+    var wy = (ev.clientY - state.view.y) / k0;
+    state.view.k = k1;
+    state.view.x = ev.clientX - wx * k1;
+    state.view.y = ev.clientY - wy * k1;
+    draw();
+  }, { passive:false });
+
+  /* ---------------- 组 ---------------- */
+  function findGroupOf(id){
+    for (var i=0;i<state.groups.length;i++){
+      if (state.groups[i].indexOf(Number(id)) !== -1) return i;
+    }
+    return -1;
+  }
+
+  function makeGroup(){
+    var ids = [];
+    for (var k in state.sel) if (state.sel[k]) ids.push(Number(k));
+    if (ids.length < 2) return;
+    // 清除已存在的组
+    var remain = [];
+    for (var i=0;i<state.groups.length;i++){
+      var g = state.groups[i].filter(function(x){ return ids.indexOf(x) === -1; });
+      if (g.length >= 2) remain.push(g);
+    }
+    remain.push(ids);
+    state.groups = remain;
+    pushHistory();
+    draw();
+    updateButtons();
+  }
+
+  function ungroup(){
+    var ids = [];
+    for (var k in state.sel) if (state.sel[k]) ids.push(Number(k));
+    state.groups = state.groups.filter(function(g){
+      for (var i=0;i<g.length;i++) if (ids.indexOf(g[i]) !== -1) return false;
+      return true;
+    });
+    // 若没有选中，则解散全部
+    if (!ids.length) state.groups = [];
+    pushHistory();
+    draw();
+    updateButtons();
+  }
+
+  /* ---------------- UI ---------------- */
+  function updateButtons(){
+    document.getElementById("btnUndo").disabled = history.length === 0;
+    document.getElementById("btnRedo").disabled = redoStack.length === 0;
+    document.getElementById("btnGroup").disabled = selCount() < 2;
+    document.getElementById("btnUngroup").disabled = state.groups.length === 0;
+    document.getElementById("mMode").textContent = state.mode === "move" ? "移动" : "选择";
+  }
+
+  function hideHint(){
+    var h = document.getElementById("hint");
+    if (h) h.classList.add("gone");
+  }
+
+  document.getElementById("btnLayout").addEventListener("click", function(){
+    pushHistory();
+    var target = computeLayout();
+    state.layoutDone = true;
+    animateTo(target, 900);
+    hideHint();
+    document.getElementById("btnShuffle").textContent = "再乱一点";
+  });
+
+  document.getElementById("btnShuffle").addEventListener("click", function(){
+    pushHistory();
+    state.anim = null;
+    scramble(1);
+    fitView(true);
+    refreshMetrics(false);
+    draw();
+    updateButtons();
+  });
+
+  document.getElementById("btnGroup").addEventListener("click", makeGroup);
+  document.getElementById("btnUngroup").addEventListener("click", ungroup);
+  document.getElementById("btnUndo").addEventListener("click", undo);
+  document.getElementById("btnRedo").addEventListener("click", redo);
+
+  document.getElementById("btnReset").addEventListener("click", function(){
+    fitView(true);
+  });
+
+  window.addEventListener("keydown", function(ev){
+    var tag = (ev.target.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea") return;
+
+    if (ev.code === "Space"){
+      ev.preventDefault();
+      state.mode = state.mode === "move" ? "select" : "move";
+      updateButtons();
+      return;
+    }
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "z"){
+      ev.preventDefault();
+      if (ev.shiftKey) redo(); else undo();
+      return;
+    }
+    if (ev.key === "Escape"){
+      state.sel = {}; draw(); updateButtons();
+      return;
+    }
+    if (ev.key.toLowerCase() === "l"){ document.getElementById("btnLayout").click(); }
+    if (ev.key.toLowerCase() === "r"){ document.getElementById("btnShuffle").click(); }
+  });
+
+  window.addEventListener("resize", resize);
+
+  /* ---------------- 启动 ---------------- */
+  function boot(){
+    buildGraph();
+    resize();
+
+    var target = computeLayout();
+    var i, id;
+    for (id in target){
+      var n = byId(Number(id));
+      if (n){ n.x = target[id].x; n.y = target[id].y; }
+    }
+    // 先排好，再打乱 —— 这样"乱"是有组织的乱
+    scramble(1.15, 20260903);
+
+    fitView(false);
+    state.layoutDone = false;
+    refreshMetrics(false);
+    document.getElementById("mCount").textContent = state.nodes.length + " / " + state.edges.length;
+    updateButtons();
+    draw();
+  }
+
+  boot();
+
+  // 提示语：无论是否交互，8 秒后自动淡出，避免长期占位
+  setTimeout(hideHint, 8000);
+})();
+</script>
+</body>
+</html>
